@@ -1,0 +1,41 @@
+;;;; -*- Hen -*-
+
+(
+ ; Your egg's license:
+ (license "LGPL-3")
+
+ ; Egg category
+ (category math)
+
+ ; A list of eggs nanograd-components depends on.
+ ; The benchmark scripts and the am_*_example.scm scripts in examples/
+ ; additionally need the array-morphisms-crunch egg; it is not a build
+ ; dependency, so the model modules stay independent of the backend in use.
+ (dependencies srfi-1 srfi-4 yasos blas nanograd array-morphisms)
+
+ (author "Ivan Raikov")
+
+ (synopsis "Model components for nanograd.")
+
+ (components (extension nanograd-transformer (source "transformer.scm")
+                        (csc-options "-O2" "-d1"))
+             (extension nanograd-mlp-mixer (source "mlp-mixer.scm")
+                        (csc-options "-O2" "-d1"))
+             (extension nanograd-resnet (source "resnet.scm")
+                        (csc-options "-O2" "-d1"))
+             (extension nanograd-am-common (source "am-common.scm")
+                        (csc-options "-O2" "-d1"))
+             (extension nanograd-am-mlp-mixer (source "am-mlp-mixer.scm")
+                        (csc-options "-O2" "-d1")
+                        (component-dependencies nanograd-am-common))
+             (extension nanograd-am-resnet (source "am-resnet.scm")
+                        (csc-options "-O2" "-d1")
+                        (component-dependencies nanograd-am-common))
+             (extension nanograd-am-transformer (source "am-transformer.scm")
+                        (csc-options "-O2" "-d1")
+                        (component-dependencies nanograd-am-common))
+             )
+
+ (test-dependencies test)
+
+)
