@@ -1,10 +1,7 @@
 ;;;; run.scm - run the nanograd-components test suite
 ;;;
 ;;; Runs each test file in its own csi process and reports one overall
-;;; result.  Separate processes keep the files independent: they define
-;;; top-level helpers with the same names but different values (such as
-;;; the tolerance tol), they share module state such as the random seed,
-;;; and each ends with (test-exit), which would stop a combined run.
+;;; result.  
 ;;;
 ;;; Usage:
 ;;;   csi -s tests/run.scm                   run every test file
