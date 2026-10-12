@@ -11,7 +11,7 @@
  ; The benchmark scripts and the am_*_example.scm scripts in examples/
  ; additionally need the array-morphisms-crunch egg; it is not a build
  ; dependency, so the model modules stay independent of the backend in use.
- (dependencies srfi-1 srfi-4 yasos blas nanograd array-morphisms)
+ (dependencies srfi-1 yasos blas nanograd array-morphisms)
 
  (author "Ivan Raikov")
 
