@@ -6,7 +6,10 @@
 ;;; run the compiled SSA programs:
 ;;;
 ;;;   crunch   crunch GEMM/convolution kernels, threaded crunch
-;;;            element-wise kernels and the crunch Adam kernel (default)
+;;;            element-wise kernels, the crunch Adam kernel and the
+;;;            segop code generator, which compiles kernels for the
+;;;            segops that no catalogue or BLAS kernel runs (default;
+;;;            AM_CRUNCH_CODEGEN=0 turns the code generator off)
 ;;;   blas     system-BLAS egg backend; element-wise code and Adam in
 ;;;            Scheme
 ;;;   scheme   no backend registered: the Scheme code of array-morphisms
@@ -20,7 +23,7 @@
 (import array-morphisms-blas-exec array-morphisms-activation-exec)
 (import array-morphisms-blas-egg-backend)
 (import array-morphisms-crunch-conv-backend array-morphisms-crunch-activations
-        array-morphisms-crunch-optimizers)
+        array-morphisms-crunch-optimizers array-morphisms-crunch-codegen)
 (import (prefix array-morphisms-grad am:))
 (import nanograd-array-morphisms nanograd-am-common)
 
@@ -31,6 +34,7 @@
   ((crunch)
    (register-blas-backend! (make-crunch-blas-backend))
    (register-activation-backend! (make-crunch-threaded-activation-backend))
+   (register-crunch-codegen-backend!)
    (register-optimizer-kernel! 'adam 'f32 crunch-adam-f32)
    (register-optimizer-kernel! 'adam 'f64 crunch-adam-f64))
   ((blas)
