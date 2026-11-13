@@ -9,16 +9,19 @@
 ;;; embedding lookup is the product X @ E with the embedding E [V, D],
 ;;; and its gradient is X^T G.
 ;;;
-;;; Every step is built from 2-D matrix products and element-wise
+;;; Every step is built from matrix products and element-wise
 ;;; operations, which the SSA engine compiles and the registered
 ;;; backends run:
-;;;   - attention head h uses the columns [h*hs, (h+1)*hs) of Q, K and V;
-;;;     they are selected by multiplying with a constant 0/1 matrix
-;;;     Sel_h [D, hs], and the head outputs are put back in place with
-;;;     Sel_h^T;
-;;;   - the scores of all B*T rows are one [B*T, B*T] product; a constant
-;;;     additive mask sets -1e9 between different sequences and, when
-;;;     causal, for keys after the query;
+;;;   - attention head h uses the columns [h*hs, (h+1)*hs) of Q, K and V.
+;;;     Q, K and V [B*T, D] are regrouped into [H, B*T, hs] arrays, and
+;;;     the attention of one head is written once as a function of its
+;;;     [B*T, hs] cells and lifted over the H heads (var-lift): the
+;;;     products of all heads are one batched matrix product, and the
+;;;     softmax reductions of all heads are one reduction each.  The head
+;;;     outputs are regrouped back into [B*T, D];
+;;;   - the scores of all B*T rows of a head are one [B*T, B*T] product;
+;;;     a constant additive mask sets -1e9 between different sequences
+;;;     and, when causal, for keys after the query;
 ;;;   - RoPE is x*C + (x@P)*S with constant cos/sin tables C, S [B*T, D]
 ;;;     and a constant pair-rotation matrix P [D, D].
 ;;; The attention cost is O((B*T)^2 * D), so this layout suits the small
@@ -28,6 +31,10 @@
 ;;; make-transformer, with the parameters in the same order, so
 ;;; am-copy-parameters! can transfer weights between the two.  The
 ;;; output projection is tied to the token embedding.
+;;;
+;;; The gradients of the lifted attention are derived by the SSA engine,
+;;; so the model is trained with am-training-step/ssa; backward! on its
+;;; output signals an error.
 
 (module nanograd-am-transformer
 
@@ -45,6 +52,10 @@
   (import (only srfi-69 make-hash-table hash-table-ref/default hash-table-set!))
   (import yasos)
   (import array-morphisms-core)
+  (import (only array-morphisms-basic-ops
+                morph-cast morph-exp morph-reduce morph+ morph- morph* morph/))
+  (import (only array-morphisms-structural-ops morph-reshape morph-transpose))
+  (import (only array-morphisms-blas-exec morph-matmul))
   (import (prefix array-morphisms-grad am:))
   (import nanograd-autograd)
   (import nanograd-layer)
@@ -58,13 +69,6 @@
   ;;;; ================================================================
   ;;;; Constant matrices
   ;;;; ================================================================
-
-  (define (head-selector d hs h dtype)
-    "Sel_h [D, hs] with ones at (h*hs + j, j)."
-    (am-const-fill (list d hs) dtype
-                   (lambda (i)
-                     (let ((r (quotient i hs)) (c (modulo i hs)))
-                       (if (= r (+ (* h hs) c)) 1.0 0.0)))))
 
   (define (attention-mask batch seq-len causal? dtype)
     "[B*T, B*T]: 0 where query row may attend to key column, else -1e9."
@@ -105,8 +109,7 @@
       (lambda (batch seq-len)
         (let ((key (cons batch seq-len)))
           (or (hash-table-ref/default cache key #f)
-              (let ((c (list (map (lambda (h) (head-selector d hs h dtype)) (iota n-heads))
-                             (attention-mask batch seq-len causal? dtype)
+              (let ((c (list (attention-mask batch seq-len causal? dtype)
                              (and use-rope?
                                   (let-values (((C S) (rope-tables batch seq-len d hs
                                                                    rope-base dtype)))
@@ -118,10 +121,30 @@
   ;;;; Layers
   ;;;; ================================================================
 
+  (define (softmax-rows-morph s)
+    "Softmax over the last axis of the morphism S, with the row maximum
+     subtracted first.  The SSA gradient passes nothing through the
+     maximum, which does not change the gradient because softmax is
+     invariant under a shift of each row (as in am-softmax-rows)."
+    (let* ((m (morph-reduce 'max s '(1) #t))
+           (e (morph-exp (morph- s m))))
+      (morph/ e (morph-reduce 'sum e '(1) #t))))
+
   (define (make-am-attention d-model n-heads #!key (dtype 'f32) (name "AM-Attention"))
     "Multi-head self-attention.  Forward takes the [B*T, D] input and the
-     constants (selectors mask rope) of make-constants.  Parameters:
-     WQ b, WK b, WV b, WO b."
+     constants (mask rope) of make-constants.  Parameters:
+     WQ b, WK b, WV b, WO b.
+
+     Q, K and V [B*T, D] are regrouped into [H, B*T, hs] arrays, copied
+     so that each head is stored contiguously.  One head computes
+
+       softmax(qh kh^T * s + mask) vh,   s = 1/sqrt(hs),
+
+     on its [B*T, hs] cells qh, kh, vh; this function is lifted over the
+     H heads with var-lift, so all heads are computed together and each
+     head has the values it would have on its own.  The [H, B*T, hs]
+     result is regrouped into [B*T, D] and projected by WO.  The
+     gradients of the lifted part come from am-training-step/ssa."
     (let* ((hs (quotient d-model n-heads))
            (scale (/ 1.0 (sqrt (exact->inexact hs))))
            (proj (lambda () (make-am-dense-layer d-model d-model dtype: dtype)))
@@ -135,9 +158,8 @@
        ((set-training-mode! self train?) (void))
        ((set-eval-mode! self) (void))
        ((forward self x consts)
-        (let* ((sels (car consts))
-               (mask (cadr consts))
-               (rope (caddr consts))
+        (let* ((mask (am:var-value (car consts)))
+               (rope (cadr consts))
                (rot (lambda (v)
                       (if rope
                           (am:var+ (am:var* v (car rope))
@@ -146,19 +168,29 @@
                (q (rot (mv (forward wq x))))
                (k (rot (mv (forward wk x))))
                (v (mv (forward wv x)))
-               (s (am-scalar scale dtype))
-               (heads
-                (map (lambda (sel)
-                       (let* ((qh (am:var-matmul q sel))
-                              (kh (am:var-matmul k sel))
-                              (vh (am:var-matmul v sel))
-                              (scores (am:var+ (am:var* (am:var-matmul qh (am:var-transpose kh '(1 0)))
-                                                        s)
-                                               mask))
-                              (oh (am:var-matmul (am-softmax-rows scores) vh)))
-                         (am:var-matmul oh (am:var-transpose sel '(1 0)))))
-                     sels))
-               (merged (fold (lambda (h acc) (am:var+ acc h)) (car heads) (cdr heads))))
+               (n (rows-of q))
+               (s (am:var-value (am-scalar scale dtype)))
+               ;; [B*T, D] -> [H, B*T, hs], one contiguous copy.  The
+               ;; SSA program differentiates this morphism directly, so
+               ;; the variable needs no gradient links of its own.
+               (heads-of
+                (lambda (m)
+                  (am:make-var
+                   (morph-cast (morph-transpose (morph-reshape (am:var-value m)
+                                                               (vector n n-heads hs))
+                                                '(1 0 2))
+                               dtype)
+                   #f)))
+               (head
+                (lambda (qh kh vh)
+                  (morph-matmul
+                   (softmax-rows-morph
+                    (morph+ (morph* (morph-matmul qh (morph-transpose kh '(1 0))) s)
+                            mask))
+                   vh)))
+               (o3 (am:var-lift head 2 (heads-of q) (heads-of k) (heads-of v)))
+               (merged (am:var-reshape (am:var-transpose o3 '(1 0 2))
+                                       (vector n d-model))))
           (forward wo (lazy merged))))
        ((layer->serializable self) #f)
        ((save-layer self path) (void)))))
