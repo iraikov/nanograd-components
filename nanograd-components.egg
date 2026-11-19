@@ -4,6 +4,8 @@
  ; Your egg's license:
  (license "LGPL-3")
 
+ (version "2.0")
+
  ; Egg category
  (category math)
 
@@ -11,7 +13,7 @@
  ; The benchmark scripts and the am_*_example.scm scripts in examples/
  ; additionally need the array-morphisms-crunch egg; it is not a build
  ; dependency, so the model modules stay independent of the backend in use.
- (dependencies srfi-1 yasos blas nanograd array-morphisms)
+ (dependencies srfi-1 yasos blas nanograd (array-morphisms "3.0"))
 
  (author "Ivan Raikov")
 

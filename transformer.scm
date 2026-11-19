@@ -242,12 +242,13 @@
 
        ;; Cos/sin vectors (length head_size/2) for one position
        ((get-frequencies self pos)
-        (with-dtype
-         dtype
-         (let ((start (* pos half-dim)))
-           (values
-            (subvec freqs-real start half-dim)
-            (subvec freqs-imag start half-dim)))))
+        (let ((start (* pos half-dim)))
+          (case dtype
+            ((f32) (values (ssub freqs-real start half-dim)
+                           (ssub freqs-imag start half-dim)))
+            ((f64) (values (dsub freqs-real start half-dim)
+                           (dsub freqs-imag start half-dim)))
+            (else (error 'get-frequencies "unsupported dtype" dtype)))))
 
        ((parameters self) '())
        ((zero-grad-layer! self) (void)))))
