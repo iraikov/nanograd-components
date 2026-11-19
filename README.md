@@ -60,9 +60,30 @@ Attention is causal by default.
   `(seq_len, d_model)` matrix. A KV cache (`make-kv-cache`) supports
   incremental generation.
 - **Lazy** (`make-am-transformer`): processes a batch of B sequences of
-  length T as one `[B*T, vocab]` matrix of one-hot rows. Each attention
-  head is selected by a constant matrix product. A block-diagonal causal
-  mask keeps the sequences separate. The lazy model has no KV cache.
+  length T as one `[B*T, vocab]` matrix of one-hot rows. A block-diagonal
+  causal mask keeps the sequences separate. The lazy model has no KV
+  cache.
+
+  All attention heads are computed together:
+  1. Q, K and V `[B*T, d_model]` are copied into `[n_heads, B*T, head_size]`
+     arrays, one block of rows per head.
+  2. The attention of one head is written once and applied to every
+     block by `var-lift` from array-morphisms. `var-lift` turns a
+     function on one block into a single computation on all blocks.
+  3. The result is copied back into `[B*T, d_model]`.
+
+  In this way the matrix products of all heads run as one batched
+  product. Each head gets exactly the values it would get if it were
+  computed on its own.
+
+  The compiled training program computes the gradients of this
+  attention, so train the lazy Transformer with `am-training-step/ssa`.
+  `backward!` on its output signals an error.
+
+  The copies in steps 1 and 3 run fast only when the segop code
+  generator of array-morphisms-crunch is registered. The benchmarks and
+  examples register it. Without it, the copies run as Scheme loops,
+  and a training step takes about three times as long.
 
 ### ResNet
 

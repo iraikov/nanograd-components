@@ -299,8 +299,25 @@ Differences from the strict model:
   embedding table. `(am-tokens->one-hot sequences vocab-size dtype)` and
   `(am-next-token-targets sequences vocab-size dtype)` build these
   matrices.
-- **Heads**: a product with a constant 0/1 matrix selects each head's
-  columns. A block-diagonal mask keeps the sequences of a batch apart.
+- **Heads**: all heads are computed together. Q, K and V are copied from
+  `[B*T, d_model]` into `[n_heads, B*T, head_size]` arrays, one block of
+  rows per head. The attention of one head,
+  `softmax(Q_h K_h^T / sqrt(hs) + M) V_h`, is written once and applied to
+  every block by `var-lift` from array-morphisms. `var-lift` turns a
+  function on one block into a single computation on all blocks: the
+  matrix products of all heads become one batched product, and the
+  softmax sums and maxima of all heads become one reduction each. Each
+  head gets exactly the values it would get if it were computed on its
+  own. The result is copied back into `[B*T, d_model]`.
+- **Sequences**: a block-diagonal mask `M` keeps the sequences of a batch
+  apart.
+- **Training**: the compiled training program computes the gradients of
+  the attention, so the model must be trained with
+  `am-training-step/ssa`. `backward!` on its output signals an error.
+- **Code generator**: the copies into and out of the head blocks run
+  fast only when the segop code generator of array-morphisms-crunch is
+  registered. Without it, they run as Scheme loops, and a training step
+  takes about three times as long.
 - **Fixed shapes**: `seq-len` is the fixed length T, not a maximum, and
   a compiled program is fixed to B and T. Shorter sequences are padded to
   T.

@@ -26,6 +26,10 @@
 ;;;                      monitoring (gradient-monitoring.scm) and print the
 ;;;                      gradient diagnosis, 0 to skip
 ;;;   AM_CRUNCH_THREADS  thread count of the crunch kernels
+;;;   AM_CRUNCH_CODEGEN  0 to turn off the segop code generator, which every
+;;;                      configuration except scheme registers: it compiles
+;;;                      kernels for the segops that no catalogue or BLAS
+;;;                      kernel runs
 ;;;
 ;;; OPENBLAS_NUM_THREADS=1 is recommended with the blas backends.
 
@@ -41,7 +45,7 @@
 (import array-morphisms-blas-egg-backend)
 (import array-morphisms-crunch-conv-backend array-morphisms-crunch-blas-backend
         array-morphisms-crunch-activations array-morphisms-crunch-threads
-        array-morphisms-crunch-optimizers)
+        array-morphisms-crunch-optimizers array-morphisms-crunch-codegen)
 (import (prefix array-morphisms-grad am:))
 (import nanograd-autograd nanograd-layer nanograd-optimizer)
 (import nanograd-array-morphisms nanograd-am-common)
@@ -87,6 +91,9 @@
   ((scheme) (void))
   (else (error "AM_BENCH_BACKEND must be crunch, crunch-single, blas, blas-crunch-act or scheme"
                backend-choice)))
+
+(unless (eq? backend-choice 'scheme)
+  (register-crunch-codegen-backend!))
 
 (unless (memq backend-choice '(blas scheme))
   (register-optimizer-kernel! 'adam 'f32 crunch-adam-f32)
@@ -151,6 +158,8 @@
   (when (memq backend-choice '(crunch crunch-single blas-crunch-act))
     (printf "  Crunch threads: ~A, native build: ~A~%"
             (crunch-thread-count) crunch-native-build?))
+  (unless (eq? backend-choice 'scheme)
+    (printf "  Code generation: ~A~%" (if (crunch-codegen) "on" "off")))
   (printf "  Configuration: ~A~%" bench-config)
   (for-each (lambda (line) (printf "  ~A~%" line)) description))
 
